@@ -1,0 +1,84 @@
+name: PR Comment Slack Notification
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  notify-slack:
+    # For issue_comment, only run if the comment is on a pull request
+    if: >
+      github.event_name == 'pull_request_review_comment' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          # Determine PR URL and number based on event type
+          if [ "${{ github.event_name }}" = "pull_request_review_comment" ]; then
+            PR_URL="${{ github.event.pull_request.html_url }}"
+            PR_TITLE="${{ github.event.pull_request.title }}"
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+          else
+            PR_URL="${{ github.event.issue.pull_request.html_url }}"
+            PR_TITLE="${{ github.event.issue.title }}"
+            PR_NUMBER="${{ github.event.issue.number }}"
+          fi
+
+          COMMENT_URL="${{ github.event.comment.html_url }}"
+          COMMENT_BODY=$(echo '${{ toJSON(github.event.comment.body) }}' | jq -r '.[0:300]')
+          COMMENTER="${{ github.event.comment.user.login }}"
+          REPO="${{ github.repository }}"
+
+          curl -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "blocks": [
+              {
+                "type": "header",
+                "text": {
+                  "type": "plain_text",
+                  "text": "New PR Comment in ${REPO}"
+                }
+              },
+              {
+                "type": "section",
+                "fields": [
+                  {
+                    "type": "mrkdwn",
+                    "text": "*PR:* <${PR_URL}|#${PR_NUMBER} ${PR_TITLE}>"
+                  },
+                  {
+                    "type": "mrkdwn",
+                    "text": "*Author:* ${COMMENTER}"
+                  }
+                ]
+              },
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Comment:*\n${COMMENT_BODY}"
+                }
+              },
+              {
+                "type": "actions",
+                "elements": [
+                  {
+                    "type": "button",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "View Comment"
+                    },
+                    "url": "${COMMENT_URL}"
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
