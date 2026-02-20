@@ -3,32 +3,35 @@
 ## 1. Create the Slack App
 
 1. Go to [https://api.slack.com/apps](https://api.slack.com/apps)
-2. Click **Create New App** → **From scratch**
-3. Name it something like `GitHub PR Notifications` and select your workspace
-4. Click **Create App**
+2. Click **Create New App** → **From an app manifest**
+3. Select your workspace
+4. Paste the contents of `slack-app-manifest.yml` from this repo
+5. Click **Create**
 
-## 2. Enable Incoming Webhooks
+## 2. Install the App and Get the Bot Token
 
-1. In the app settings sidebar, click **Incoming Webhooks**
-2. Toggle **Activate Incoming Webhooks** to **On**
-3. Click **Add New Webhook to Workspace**
-4. Select the channel where you want notifications (e.g. `#pr-reviews`)
-5. Click **Allow**
-6. Copy the **Webhook URL** — it looks like `https://hooks.slack.com/services/T.../B.../xxx`
+1. In the app settings sidebar, click **Install App**
+2. Click **Install to Workspace** and authorize
+3. Copy the **Bot User OAuth Token** (`xoxb-...`)
 
-## 3. Add the Webhook to GitHub
+## 3. Get Your Slack Channel ID
+
+1. In Slack, right-click the channel you want notifications in (e.g. `#pr-reviews`)
+2. Click **View channel details**
+3. At the bottom of the popup, copy the **Channel ID** (e.g. `C0123456789`)
+
+## 4. Add Secrets to GitHub
 
 1. Go to your GitHub repository → **Settings** → **Secrets and variables** → **Actions**
-2. Click **New repository secret**
-3. Name: `SLACK_WEBHOOK_URL`
-4. Value: paste the webhook URL from step 2
-5. Click **Add secret**
+2. Add two repository secrets:
+   - `SLACK_BOT_TOKEN` — the `xoxb-...` token from step 2
+   - `SLACK_CHANNEL_ID` — the channel ID from step 3
 
-## 4. Add the Workflow
+## 5. Add the Workflow
 
 Copy the `.github/workflows/pr-comment-slack-notify.yml` file into your repository.
 
-Push to your default branch and you're done! Any new comment on a PR will trigger a Slack notification.
+Push to your default branch and you're done! Any new comment on a PR will trigger a Slack notification with the commenter's GitHub avatar and username.
 
 ## What triggers a notification?
 
@@ -36,3 +39,9 @@ Push to your default branch and you're done! Any new comment on a PR will trigge
 - **Review comments** (inline code comments during a review)
 
 Only new comments trigger notifications (not edits or deletions).
+
+## Troubleshooting
+
+- **Notifications not appearing?** Check that the `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` secrets are set correctly.
+- **Avatar not showing?** The `chat:write.customize` scope is required. Reinstall the app if you added it after the initial install.
+- **"not_in_channel" error?** Invite the bot to the channel by typing `/invite @GitHub Comments` in the channel.
