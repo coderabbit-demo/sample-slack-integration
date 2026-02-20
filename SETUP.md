@@ -36,3 +36,9 @@ Push to your default branch and you're done! Any new comment on a PR will trigge
 - **Review comments** (inline code comments during a review)
 
 Only new comments trigger notifications (not edits or deletions).
+
+## Troubleshooting
+
+- **Notifications not appearing?** Check that the `SLACK_WEBHOOK_URL` secret is set correctly and the webhook is active in your Slack app settings.
+- **Only seeing some comments?** The workflow covers both general PR comments and inline review comments. Draft PR comments are also included.
+- **Want to filter by repo or user?** You can add `if` conditions to the workflow to skip notifications from bots or specific users.
