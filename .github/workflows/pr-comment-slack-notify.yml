@@ -1,4 +1,4 @@
-name: PR Comment Slack Notification
+name: PR Slack Notification
 
 on:
   pull_request:
@@ -116,55 +116,97 @@ jobs:
             # Comment event — try to find existing thread, then reply in it
             THREAD_TS=$(find_thread_ts)
 
-            # Truncate comment body to 200 chars
-            if [ ${#COMMENT_BODY} -gt 200 ]; then
-              TRUNCATED_BODY="${COMMENT_BODY:0:200}..."
+            # Clean comment body:
+            # 1. Remove HTML comments (<!-- ... -->)
+            # 2. Remove GitHub admonitions (> [!TIP], > [!NOTE], etc. and their continuation lines)
+            # 3. Trim leading/trailing whitespace
+            CLEANED_BODY=$(echo "$COMMENT_BODY" | perl -0777 -pe '
+              s/<!--.*?-->//gs;
+              s/^>\s*\[!(TIP|NOTE|WARNING|CAUTION|IMPORTANT)\]\s*\n(^>.*\n)*//gm;
+              s/^\s+|\s+$//g;
+            ')
+
+            # Truncate to 200 chars
+            if [ ${#CLEANED_BODY} -gt 200 ]; then
+              TRUNCATED_BODY="${CLEANED_BODY:0:200}..."
             else
-              TRUNCATED_BODY="$COMMENT_BODY"
+              TRUNCATED_BODY="$CLEANED_BODY"
             fi
 
-            PAYLOAD=$(jq -n \
-              --arg channel "$SLACK_CHANNEL_ID" \
-              --arg repo_short "$REPO_SHORT" \
-              --arg pr_url "$PR_URL" \
-              --arg pr_number "$PR_NUMBER" \
-              --arg pr_title "$PR_TITLE" \
-              --arg commenter "$COMMENTER" \
-              --arg comment_body "$TRUNCATED_BODY" \
-              --arg comment_url "$COMMENT_URL" \
-              --arg avatar "$COMMENTER_AVATAR" \
-              --arg thread_ts "$THREAD_TS" \
-              '{
-                "channel": $channel,
-                "username": $commenter,
-                "icon_url": $avatar,
-                "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
-                "unfurl_links": false,
-                "blocks": [
-                  {
-                    "type": "section",
-                    "text": {
-                      "type": "mrkdwn",
-                      "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
+            if [ -n "$THREAD_TS" ]; then
+              # Thread reply — just show the comment text, no header
+              PAYLOAD=$(jq -n \
+                --arg channel "$SLACK_CHANNEL_ID" \
+                --arg commenter "$COMMENTER" \
+                --arg comment_body "$TRUNCATED_BODY" \
+                --arg avatar "$COMMENTER_AVATAR" \
+                --arg thread_ts "$THREAD_TS" \
+                '{
+                  "channel": $channel,
+                  "username": $commenter,
+                  "icon_url": $avatar,
+                  "thread_ts": $thread_ts,
+                  "text": $comment_body,
+                  "unfurl_links": false,
+                  "blocks": [
+                    {
+                      "type": "rich_text",
+                      "elements": [
+                        {
+                          "type": "rich_text_quote",
+                          "elements": [
+                            {
+                              "type": "text",
+                              "text": $comment_body
+                            }
+                          ]
+                        }
+                      ]
                     }
-                  },
-                  {
-                    "type": "rich_text",
-                    "elements": [
-                      {
-                        "type": "rich_text_quote",
-                        "elements": [
-                          {
-                            "type": "text",
-                            "text": $comment_body
-                          }
-                        ]
+                  ]
+                }')
+            else
+              # No thread found — post top-level with full context
+              PAYLOAD=$(jq -n \
+                --arg channel "$SLACK_CHANNEL_ID" \
+                --arg repo_short "$REPO_SHORT" \
+                --arg pr_url "$PR_URL" \
+                --arg pr_number "$PR_NUMBER" \
+                --arg pr_title "$PR_TITLE" \
+                --arg commenter "$COMMENTER" \
+                --arg comment_body "$TRUNCATED_BODY" \
+                --arg avatar "$COMMENTER_AVATAR" \
+                '{
+                  "channel": $channel,
+                  "username": $commenter,
+                  "icon_url": $avatar,
+                  "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
+                  "unfurl_links": false,
+                  "blocks": [
+                    {
+                      "type": "section",
+                      "text": {
+                        "type": "mrkdwn",
+                        "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
                       }
-                    ]
-                  }
-                ]
-              }
-              | if $thread_ts != "" then .thread_ts = $thread_ts else . end')
+                    },
+                    {
+                      "type": "rich_text",
+                      "elements": [
+                        {
+                          "type": "rich_text_quote",
+                          "elements": [
+                            {
+                              "type": "text",
+                              "text": $comment_body
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }')
+            fi
 
             curl -s -X POST "https://slack.com/api/chat.postMessage" \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
