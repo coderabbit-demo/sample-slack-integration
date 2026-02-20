@@ -5,7 +5,7 @@
 1. Go to [https://api.slack.com/apps](https://api.slack.com/apps)
 2. Click **Create New App** → **From an app manifest**
 3. Select your workspace
-4. Paste the contents of `slack-app-manifest.yml` from this repo
+4. Paste the contents of `slack-app-manifest.json` from this repo
 5. Click **Create**
 
 ## 2. Install the App and Get the Bot Token
