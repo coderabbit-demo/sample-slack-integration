@@ -17,68 +17,85 @@ jobs:
       - name: Send Slack notification
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
+          PR_URL_REVIEW: ${{ github.event.pull_request.html_url }}
+          PR_TITLE_REVIEW: ${{ github.event.pull_request.title }}
+          PR_NUMBER_REVIEW: ${{ github.event.pull_request.number }}
+          PR_URL_ISSUE: ${{ github.event.issue.pull_request.html_url }}
+          PR_TITLE_ISSUE: ${{ github.event.issue.title }}
+          PR_NUMBER_ISSUE: ${{ github.event.issue.number }}
         run: |
-          # Determine PR URL and number based on event type
-          if [ "${{ github.event_name }}" = "pull_request_review_comment" ]; then
-            PR_URL="${{ github.event.pull_request.html_url }}"
-            PR_TITLE="${{ github.event.pull_request.title }}"
-            PR_NUMBER="${{ github.event.pull_request.number }}"
+          if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+            PR_URL="$PR_URL_REVIEW"
+            PR_TITLE="$PR_TITLE_REVIEW"
+            PR_NUMBER="$PR_NUMBER_REVIEW"
           else
-            PR_URL="${{ github.event.issue.pull_request.html_url }}"
-            PR_TITLE="${{ github.event.issue.title }}"
-            PR_NUMBER="${{ github.event.issue.number }}"
+            PR_URL="$PR_URL_ISSUE"
+            PR_TITLE="$PR_TITLE_ISSUE"
+            PR_NUMBER="$PR_NUMBER_ISSUE"
           fi
 
-          COMMENT_URL="${{ github.event.comment.html_url }}"
-          COMMENT_BODY=$(echo '${{ toJSON(github.event.comment.body) }}' | jq -r '.[0:300]')
-          COMMENTER="${{ github.event.comment.user.login }}"
-          REPO="${{ github.repository }}"
+          # Truncate comment body to 300 chars
+          TRUNCATED_BODY="${COMMENT_BODY:0:300}"
+
+          # Build JSON payload safely with jq
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --arg pr_url "$PR_URL" \
+            --arg pr_number "$PR_NUMBER" \
+            --arg pr_title "$PR_TITLE" \
+            --arg commenter "$COMMENTER" \
+            --arg comment_body "$TRUNCATED_BODY" \
+            --arg comment_url "$COMMENT_URL" \
+            '{
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": ("New PR Comment in " + $repo)
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": ("*PR:* <" + $pr_url + "|#" + $pr_number + " " + $pr_title + ">")
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": ("*Author:* " + $commenter)
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ("*Comment:*\n" + $comment_body)
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Comment"
+                      },
+                      "url": $comment_url
+                    }
+                  ]
+                }
+              ]
+            }')
 
           curl -X POST "$SLACK_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            -d @- <<EOF
-          {
-            "blocks": [
-              {
-                "type": "header",
-                "text": {
-                  "type": "plain_text",
-                  "text": "New PR Comment in ${REPO}"
-                }
-              },
-              {
-                "type": "section",
-                "fields": [
-                  {
-                    "type": "mrkdwn",
-                    "text": "*PR:* <${PR_URL}|#${PR_NUMBER} ${PR_TITLE}>"
-                  },
-                  {
-                    "type": "mrkdwn",
-                    "text": "*Author:* ${COMMENTER}"
-                  }
-                ]
-              },
-              {
-                "type": "section",
-                "text": {
-                  "type": "mrkdwn",
-                  "text": "*Comment:*\n${COMMENT_BODY}"
-                }
-              },
-              {
-                "type": "actions",
-                "elements": [
-                  {
-                    "type": "button",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "View Comment"
-                    },
-                    "url": "${COMMENT_URL}"
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
+            -d "$PAYLOAD"
