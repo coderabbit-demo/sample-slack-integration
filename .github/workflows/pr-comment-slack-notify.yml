@@ -39,12 +39,19 @@ jobs:
             PR_NUMBER="$PR_NUMBER_ISSUE"
           fi
 
-          # Truncate comment body to 300 chars
-          TRUNCATED_BODY="${COMMENT_BODY:0:300}"
+          # Extract repo short name from "owner/repo"
+          REPO_SHORT="${REPO#*/}"
 
-          # Build JSON payload safely with jq
+          # Truncate comment body to 200 chars and add ellipsis if needed
+          if [ ${#COMMENT_BODY} -gt 200 ]; then
+            TRUNCATED_BODY="${COMMENT_BODY:0:200}..."
+          else
+            TRUNCATED_BODY="$COMMENT_BODY"
+          fi
+
+          # Build JSON payload to match GitHub's native Slack notification style
           PAYLOAD=$(jq -n \
-            --arg repo "$REPO" \
+            --arg repo_short "$REPO_SHORT" \
             --arg pr_url "$PR_URL" \
             --arg pr_number "$PR_NUMBER" \
             --arg pr_title "$PR_TITLE" \
@@ -52,44 +59,27 @@ jobs:
             --arg comment_body "$TRUNCATED_BODY" \
             --arg comment_url "$COMMENT_URL" \
             '{
+              "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
+              "unfurl_links": false,
               "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": ("New PR Comment in " + $repo)
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": ("*PR:* <" + $pr_url + "|#" + $pr_number + " " + $pr_title + ">")
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": ("*Author:* " + $commenter)
-                    }
-                  ]
-                },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": ("*Comment:*\n" + $comment_body)
+                    "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
                   }
                 },
                 {
-                  "type": "actions",
+                  "type": "rich_text",
                   "elements": [
                     {
-                      "type": "button",
-                      "text": {
-                        "type": "plain_text",
-                        "text": "View Comment"
-                      },
-                      "url": $comment_url
+                      "type": "rich_text_quote",
+                      "elements": [
+                        {
+                          "type": "text",
+                          "text": $comment_body
+                        }
+                      ]
                     }
                   ]
                 }
