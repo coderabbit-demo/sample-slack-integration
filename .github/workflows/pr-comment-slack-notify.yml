@@ -4,9 +4,9 @@ on:
   pull_request:
     types: [opened, reopened]
   issue_comment:
-    types: [created]
+    types: [created, edited]
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited]
 
 jobs:
   notify-slack:
@@ -22,6 +22,8 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          COMMENT_ID: ${{ github.event.comment.id }}
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
           COMMENTER: ${{ github.event.comment.user.login }}
@@ -133,14 +135,96 @@ jobs:
               TRUNCATED_BODY="$CLEANED_BODY"
             fi
 
-            if [ -n "$THREAD_TS" ]; then
-              # Thread reply — just show the comment text, no header
+            # Build the blocks for the comment
+            COMMENT_BLOCKS=$(jq -n --arg comment_body "$TRUNCATED_BODY" '[
+              {
+                "type": "rich_text",
+                "elements": [
+                  {
+                    "type": "rich_text_quote",
+                    "elements": [
+                      {
+                        "type": "text",
+                        "text": $comment_body
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]')
+
+            # Build metadata to tag this Slack message with the GitHub comment ID
+            METADATA=$(jq -n --arg comment_id "$COMMENT_ID" '{
+              "event_type": "github_comment",
+              "event_payload": { "comment_id": $comment_id }
+            }')
+
+            if [ "$EVENT_ACTION" = "edited" ] && [ -n "$THREAD_TS" ]; then
+              # Edit — find the existing Slack message for this GitHub comment and update it
+              REPLIES=$(curl -s "https://slack.com/api/conversations.replies?channel=$SLACK_CHANNEL_ID&ts=$THREAD_TS&include_all_metadata=true&limit=200" \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN")
+
+              SLACK_MSG_TS=$(echo "$REPLIES" | jq -r --arg cid "$COMMENT_ID" '
+                .messages[]
+                | select(.metadata.event_payload.comment_id == $cid)
+                | .ts' | head -1)
+
+              if [ -n "$SLACK_MSG_TS" ] && [ "$SLACK_MSG_TS" != "null" ]; then
+                # Found the message — update it
+                UPDATE_PAYLOAD=$(jq -n \
+                  --arg channel "$SLACK_CHANNEL_ID" \
+                  --arg ts "$SLACK_MSG_TS" \
+                  --arg comment_body "$TRUNCATED_BODY" \
+                  --argjson blocks "$COMMENT_BLOCKS" \
+                  --argjson metadata "$METADATA" \
+                  '{
+                    "channel": $channel,
+                    "ts": $ts,
+                    "text": $comment_body,
+                    "blocks": $blocks,
+                    "metadata": $metadata
+                  }')
+
+                curl -s -X POST "https://slack.com/api/chat.update" \
+                  -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "$UPDATE_PAYLOAD"
+              else
+                # Could not find the original message — post as new reply
+                PAYLOAD=$(jq -n \
+                  --arg channel "$SLACK_CHANNEL_ID" \
+                  --arg commenter "$COMMENTER" \
+                  --arg comment_body "$TRUNCATED_BODY" \
+                  --arg avatar "$COMMENTER_AVATAR" \
+                  --arg thread_ts "$THREAD_TS" \
+                  --argjson blocks "$COMMENT_BLOCKS" \
+                  --argjson metadata "$METADATA" \
+                  '{
+                    "channel": $channel,
+                    "username": $commenter,
+                    "icon_url": $avatar,
+                    "thread_ts": $thread_ts,
+                    "text": $comment_body,
+                    "unfurl_links": false,
+                    "blocks": $blocks,
+                    "metadata": $metadata
+                  }')
+
+                curl -s -X POST "https://slack.com/api/chat.postMessage" \
+                  -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "$PAYLOAD"
+              fi
+            elif [ -n "$THREAD_TS" ]; then
+              # New comment with existing thread — reply in thread
               PAYLOAD=$(jq -n \
                 --arg channel "$SLACK_CHANNEL_ID" \
                 --arg commenter "$COMMENTER" \
                 --arg comment_body "$TRUNCATED_BODY" \
                 --arg avatar "$COMMENTER_AVATAR" \
                 --arg thread_ts "$THREAD_TS" \
+                --argjson blocks "$COMMENT_BLOCKS" \
+                --argjson metadata "$METADATA" \
                 '{
                   "channel": $channel,
                   "username": $commenter,
@@ -148,25 +232,32 @@ jobs:
                   "thread_ts": $thread_ts,
                   "text": $comment_body,
                   "unfurl_links": false,
-                  "blocks": [
-                    {
-                      "type": "rich_text",
-                      "elements": [
-                        {
-                          "type": "rich_text_quote",
-                          "elements": [
-                            {
-                              "type": "text",
-                              "text": $comment_body
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
+                  "blocks": $blocks,
+                  "metadata": $metadata
                 }')
+
+              curl -s -X POST "https://slack.com/api/chat.postMessage" \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD"
             else
               # No thread found — post top-level with full context
+              HEADER_BLOCK=$(jq -n \
+                --arg repo_short "$REPO_SHORT" \
+                --arg pr_url "$PR_URL" \
+                --arg pr_number "$PR_NUMBER" \
+                --arg pr_title "$PR_TITLE" \
+                --arg commenter "$COMMENTER" \
+                '{
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
+                  }
+                }')
+
+              ALL_BLOCKS=$(echo "$COMMENT_BLOCKS" | jq --argjson header "$HEADER_BLOCK" '[$header] + .')
+
               PAYLOAD=$(jq -n \
                 --arg channel "$SLACK_CHANNEL_ID" \
                 --arg repo_short "$REPO_SHORT" \
@@ -174,42 +265,22 @@ jobs:
                 --arg pr_number "$PR_NUMBER" \
                 --arg pr_title "$PR_TITLE" \
                 --arg commenter "$COMMENTER" \
-                --arg comment_body "$TRUNCATED_BODY" \
                 --arg avatar "$COMMENTER_AVATAR" \
+                --argjson blocks "$ALL_BLOCKS" \
+                --argjson metadata "$METADATA" \
                 '{
                   "channel": $channel,
                   "username": $commenter,
                   "icon_url": $avatar,
                   "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
                   "unfurl_links": false,
-                  "blocks": [
-                    {
-                      "type": "section",
-                      "text": {
-                        "type": "mrkdwn",
-                        "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
-                      }
-                    },
-                    {
-                      "type": "rich_text",
-                      "elements": [
-                        {
-                          "type": "rich_text_quote",
-                          "elements": [
-                            {
-                              "type": "text",
-                              "text": $comment_body
-                            }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
+                  "blocks": $blocks,
+                  "metadata": $metadata
                 }')
-            fi
 
-            curl -s -X POST "https://slack.com/api/chat.postMessage" \
-              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$PAYLOAD"
+              curl -s -X POST "https://slack.com/api/chat.postMessage" \
+                -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "$PAYLOAD"
+            fi
           fi
