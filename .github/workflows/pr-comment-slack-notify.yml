@@ -21,6 +21,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           COMMENT_URL: ${{ github.event.comment.html_url }}
           COMMENTER: ${{ github.event.comment.user.login }}
+          COMMENTER_AVATAR: ${{ github.event.comment.user.avatar_url }}
           REPO: ${{ github.repository }}
           PR_URL_REVIEW: ${{ github.event.pull_request.html_url }}
           PR_TITLE_REVIEW: ${{ github.event.pull_request.title }}
@@ -58,7 +59,10 @@ jobs:
             --arg commenter "$COMMENTER" \
             --arg comment_body "$TRUNCATED_BODY" \
             --arg comment_url "$COMMENT_URL" \
+            --arg avatar "$COMMENTER_AVATAR" \
             '{
+              "username": $commenter,
+              "icon_url": $avatar,
               "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
               "unfurl_links": false,
               "blocks": [
