@@ -51,6 +51,12 @@ jobs:
             TRUNCATED_BODY="$COMMENT_BODY"
           fi
 
+          # Ensure bot has joined the channel
+          curl -s -X POST "https://slack.com/api/conversations.join" \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"channel\": \"$SLACK_CHANNEL_ID\"}"
+
           # Build JSON payload to match GitHub's native Slack notification style
           PAYLOAD=$(jq -n \
             --arg channel "$SLACK_CHANNEL_ID" \

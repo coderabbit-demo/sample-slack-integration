@@ -44,4 +44,4 @@ Only new comments trigger notifications (not edits or deletions).
 
 - **Notifications not appearing?** Check that the `SLACK_BOT_TOKEN` and `SLACK_CHANNEL_ID` secrets are set correctly.
 - **Avatar not showing?** The `chat:write.customize` scope is required. Reinstall the app if you added it after the initial install.
-- **"not_in_channel" error?** Invite the bot to the channel by typing `/invite @GitHub Comments` in the channel.
+- **"not_in_channel" error?** The bot auto-joins public channels. For private channels, you need to manually invite it with `/invite @GitHub Comments`.

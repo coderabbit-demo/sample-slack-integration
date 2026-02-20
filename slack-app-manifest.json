@@ -14,7 +14,8 @@
     "scopes": {
       "bot": [
         "chat:write",
-        "chat:write.customize"
+        "chat:write.customize",
+        "channels:join"
       ]
     }
   }
