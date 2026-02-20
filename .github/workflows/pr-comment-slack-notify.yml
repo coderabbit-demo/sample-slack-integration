@@ -120,11 +120,19 @@ jobs:
 
             # Clean comment body:
             # 1. Remove HTML comments (<!-- ... -->)
-            # 2. Remove GitHub admonitions (> [!TIP], > [!NOTE], etc. and their continuation lines)
-            # 3. Trim leading/trailing whitespace
+            # 2. Remove <details>...</details> blocks (CodeRabbit analysis chains)
+            # 3. Remove GitHub admonitions (> [!TIP], > [!NOTE], etc. and their continuation lines)
+            # 4. Remove --- separators and everything after them
+            # 5. Remove remaining HTML tags (<sub>, <summary>, etc.)
+            # 6. Remove lines that are only whitespace or markdown artifacts
+            # 7. Trim leading/trailing whitespace
             CLEANED_BODY=$(echo "$COMMENT_BODY" | perl -0777 -pe '
               s/<!--.*?-->//gs;
+              s/<details>.*?<\/details>//gs;
               s/^>\s*\[!(TIP|NOTE|WARNING|CAUTION|IMPORTANT)\]\s*\n(^>.*\n)*//gm;
+              s/\n---\s*\n.*//s;
+              s/<[^>]+>//g;
+              s/^\s*\n//gm;
               s/^\s+|\s+$//g;
             ')
 
