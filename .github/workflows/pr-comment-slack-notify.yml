@@ -1,6 +1,8 @@
 name: PR Comment Slack Notification
 
 on:
+  pull_request:
+    types: [opened, reopened]
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -10,6 +12,7 @@ jobs:
   notify-slack:
     # For issue_comment, only run if the comment is on a pull request
     if: >
+      github.event_name == 'pull_request' ||
       github.event_name == 'pull_request_review_comment' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request)
     runs-on: ubuntu-latest
@@ -24,14 +27,27 @@ jobs:
           COMMENTER: ${{ github.event.comment.user.login }}
           COMMENTER_AVATAR: ${{ github.event.comment.user.avatar_url }}
           REPO: ${{ github.repository }}
+          # pull_request event
+          PR_URL_PR: ${{ github.event.pull_request.html_url }}
+          PR_TITLE_PR: ${{ github.event.pull_request.title }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
+          PR_AUTHOR_PR: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_AVATAR_PR: ${{ github.event.pull_request.user.avatar_url }}
+          # pull_request_review_comment event
           PR_URL_REVIEW: ${{ github.event.pull_request.html_url }}
           PR_TITLE_REVIEW: ${{ github.event.pull_request.title }}
           PR_NUMBER_REVIEW: ${{ github.event.pull_request.number }}
+          # issue_comment event
           PR_URL_ISSUE: ${{ github.event.issue.pull_request.html_url }}
           PR_TITLE_ISSUE: ${{ github.event.issue.title }}
           PR_NUMBER_ISSUE: ${{ github.event.issue.number }}
         run: |
-          if [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
+          # Determine PR details based on event type
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            PR_URL="$PR_URL_PR"
+            PR_TITLE="$PR_TITLE_PR"
+            PR_NUMBER="$PR_NUMBER_PR"
+          elif [ "$EVENT_NAME" = "pull_request_review_comment" ]; then
             PR_URL="$PR_URL_REVIEW"
             PR_TITLE="$PR_TITLE_REVIEW"
             PR_NUMBER="$PR_NUMBER_REVIEW"
@@ -41,65 +57,117 @@ jobs:
             PR_NUMBER="$PR_NUMBER_ISSUE"
           fi
 
-          # Extract repo short name from "owner/repo"
           REPO_SHORT="${REPO#*/}"
-
-          # Truncate comment body to 200 chars and add ellipsis if needed
-          if [ ${#COMMENT_BODY} -gt 200 ]; then
-            TRUNCATED_BODY="${COMMENT_BODY:0:200}..."
-          else
-            TRUNCATED_BODY="$COMMENT_BODY"
-          fi
 
           # Ensure bot has joined the channel
           curl -s -X POST "https://slack.com/api/conversations.join" \
             -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"channel\": \"$SLACK_CHANNEL_ID\"}"
+            -d "{\"channel\": \"$SLACK_CHANNEL_ID\"}" > /dev/null
 
-          # Build JSON payload to match GitHub's native Slack notification style
-          PAYLOAD=$(jq -n \
-            --arg channel "$SLACK_CHANNEL_ID" \
-            --arg repo_short "$REPO_SHORT" \
-            --arg pr_url "$PR_URL" \
-            --arg pr_number "$PR_NUMBER" \
-            --arg pr_title "$PR_TITLE" \
-            --arg commenter "$COMMENTER" \
-            --arg comment_body "$TRUNCATED_BODY" \
-            --arg comment_url "$COMMENT_URL" \
-            --arg avatar "$COMMENTER_AVATAR" \
-            '{
-              "channel": $channel,
-              "username": $commenter,
-              "icon_url": $avatar,
-              "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
-              "unfurl_links": false,
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
-                  }
-                },
-                {
-                  "type": "rich_text",
-                  "elements": [
-                    {
-                      "type": "rich_text_quote",
-                      "elements": [
-                        {
-                          "type": "text",
-                          "text": $comment_body
-                        }
-                      ]
+          # Search channel history for an existing thread about this PR
+          find_thread_ts() {
+            HISTORY=$(curl -s "https://slack.com/api/conversations.history?channel=$SLACK_CHANNEL_ID&limit=200" \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN")
+
+            # Look for a message containing this PR's URL
+            THREAD_TS=$(echo "$HISTORY" | jq -r --arg pr_url "$PR_URL" '
+              .messages[]
+              | select(.text != null and (.text | contains($pr_url)))
+              | .ts' | tail -1)
+
+            if [ -n "$THREAD_TS" ] && [ "$THREAD_TS" != "null" ]; then
+              echo "$THREAD_TS"
+            fi
+          }
+
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            # PR opened/reopened — post a new top-level thread-starting message
+            PAYLOAD=$(jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg repo_short "$REPO_SHORT" \
+              --arg pr_url "$PR_URL" \
+              --arg pr_number "$PR_NUMBER" \
+              --arg pr_title "$PR_TITLE" \
+              --arg author "$PR_AUTHOR_PR" \
+              --arg avatar "$PR_AUTHOR_AVATAR_PR" \
+              '{
+                "channel": $channel,
+                "username": $author,
+                "icon_url": $avatar,
+                "text": ("New pull request [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + "> by " + $author),
+                "unfurl_links": false,
+                "blocks": [
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": ("New pull request [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + "> by " + $author)
                     }
-                  ]
-                }
-              ]
-            }')
+                  }
+                ]
+              }')
 
-          curl -X POST "https://slack.com/api/chat.postMessage" \
-            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$PAYLOAD"
+            curl -s -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD"
+          else
+            # Comment event — try to find existing thread, then reply in it
+            THREAD_TS=$(find_thread_ts)
+
+            # Truncate comment body to 200 chars
+            if [ ${#COMMENT_BODY} -gt 200 ]; then
+              TRUNCATED_BODY="${COMMENT_BODY:0:200}..."
+            else
+              TRUNCATED_BODY="$COMMENT_BODY"
+            fi
+
+            PAYLOAD=$(jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg repo_short "$REPO_SHORT" \
+              --arg pr_url "$PR_URL" \
+              --arg pr_number "$PR_NUMBER" \
+              --arg pr_title "$PR_TITLE" \
+              --arg commenter "$COMMENTER" \
+              --arg comment_body "$TRUNCATED_BODY" \
+              --arg comment_url "$COMMENT_URL" \
+              --arg avatar "$COMMENTER_AVATAR" \
+              --arg thread_ts "$THREAD_TS" \
+              '{
+                "channel": $channel,
+                "username": $commenter,
+                "icon_url": $avatar,
+                "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">"),
+                "unfurl_links": false,
+                "blocks": [
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": ($commenter + " commented on [" + $repo_short + "#" + $pr_number + "] <" + $pr_url + "|" + $pr_title + ">")
+                    }
+                  },
+                  {
+                    "type": "rich_text",
+                    "elements": [
+                      {
+                        "type": "rich_text_quote",
+                        "elements": [
+                          {
+                            "type": "text",
+                            "text": $comment_body
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+              | if $thread_ts != "" then .thread_ts = $thread_ts else . end')
+
+            curl -s -X POST "https://slack.com/api/chat.postMessage" \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$PAYLOAD"
+          fi

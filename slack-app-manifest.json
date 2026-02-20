@@ -15,7 +15,8 @@
       "bot": [
         "chat:write",
         "chat:write.customize",
-        "channels:join"
+        "channels:join",
+        "channels:history"
       ]
     }
   }
